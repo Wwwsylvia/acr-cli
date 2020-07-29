@@ -166,13 +166,12 @@ func purgeTags(ctx context.Context, acrClient api.AcrCLIClientInterface, loginUR
 	if err != nil {
 		return -1, err
 	}
-	lastTag := ""
+	// getTagsToDelete() returns paginated result. A non-empty lastTag indicates there are more results available.
 	tagsToDelete, lastTag, err := getTagsToDelete(ctx, acrClient, repoName, tagRegex, timeToCompare, "")
 	if err != nil {
 		return -1, err
 	}
-	// GetTagsToDelete will return an empty lastTag when there are no more tags.
-	for len(lastTag) > 0 {
+	for tagsToDelete != nil && len(*tagsToDelete) > 0 {
 		for _, tag := range *tagsToDelete {
 			wg.Add(1)
 			// The purge job is queued, after a purge worker picks it up the tag will be deleted.
@@ -188,6 +187,12 @@ func purgeTags(ctx context.Context, acrClient api.AcrCLIClientInterface, loginUR
 				return -1, wErr.Error
 			}
 		}
+
+		// no more results to retrieve, break the loop.
+		if lastTag == "" {
+			break
+		}
+
 		tagsToDelete, lastTag, err = getTagsToDelete(ctx, acrClient, repoName, tagRegex, timeToCompare, lastTag)
 		if err != nil {
 			return -1, err
@@ -234,8 +239,8 @@ func parseDuration(ago string) (time.Duration, error) {
 }
 
 // getTagsToDelete gets all tags that should be deleted according to the ago flag and the filter flag, this will at most return 100 tags,
-// returns a pointer to a slice that contains the tags that will be deleted, the last tag obtained through the AcrListTags function
-// and an error in case it occurred, the fourth return value contains a map that is used to determine how many tags a manifest has
+// returns a pointer to a slice that contains the tags that will be deleted, a last tag to query next result block,
+// and an error in case it occurred.
 func getTagsToDelete(ctx context.Context,
 	acrClient api.AcrCLIClientInterface,
 	repoName string,
@@ -245,16 +250,15 @@ func getTagsToDelete(ctx context.Context,
 
 	var matches bool
 	var lastUpdateTime time.Time
-	resultTags, err := acrClient.GetAcrTags(ctx, repoName, "", lastTag)
+	resultTags, newLastTag, err := acrClient.GetAcrTags(ctx, repoName, "", lastTag)
 	if err != nil {
 		if resultTags != nil && resultTags.StatusCode == http.StatusNotFound {
 			fmt.Printf("%s repository not found\n", repoName)
 			return nil, "", nil
 		}
-		// An empty lastTag string is returned so there will not be any tag purged.
+		// An nil slice is returned so there will not be any tag purged.
 		return nil, "", err
 	}
-	newLastTag := ""
 	if resultTags != nil && resultTags.TagsAttributes != nil && len(*resultTags.TagsAttributes) > 0 {
 		tags := *resultTags.TagsAttributes
 		tagsToDelete := []acr.TagAttributesBase{}
@@ -274,8 +278,6 @@ func getTagsToDelete(ctx context.Context,
 				tagsToDelete = append(tagsToDelete, tag)
 			}
 		}
-		// The lastTag is updated to keep the for loop going.
-		newLastTag = *tags[len(tags)-1].Name
 		return &tagsToDelete, newLastTag, nil
 	}
 	// In case there are no more tags return empty string as lastTag so that the purgeTags function stops
@@ -399,13 +401,13 @@ func dryRunPurge(ctx context.Context, acrClient api.AcrCLIClientInterface, login
 	if err != nil {
 		return -1, -1, err
 	}
-	lastTag := ""
+	// getTagsToDelete() returns paginated result. A non-empty lastTag indicates there are more results available.
 	tagsToDelete, lastTag, err := getTagsToDelete(ctx, acrClient, repoName, regex, timeToCompare, "")
 	if err != nil {
 		return -1, -1, err
 	}
 	// The loop to get the deleted tags follows the same logic as the one in the purgeTags function
-	for len(lastTag) > 0 {
+	for tagsToDelete != nil && len(*tagsToDelete) > 0 {
 		for _, tag := range *tagsToDelete {
 			// For every tag that would be deleted first check if it exists in the map, if it doesn't add a new key
 			// with value 1 and if it does just add 1 to the existent value.
@@ -417,6 +419,12 @@ func dryRunPurge(ctx context.Context, acrClient api.AcrCLIClientInterface, login
 			fmt.Printf("%s/%s:%s\n", loginURL, repoName, *tag.Name)
 			deletedTagsCount++
 		}
+
+		// no more results to retrieve, break the loop.
+		if lastTag == "" {
+			break
+		}
+
 		tagsToDelete, lastTag, err = getTagsToDelete(ctx, acrClient, repoName, regex, timeToCompare, lastTag)
 		if err != nil {
 			return -1, -1, err
@@ -487,8 +495,7 @@ func dryRunPurge(ctx context.Context, acrClient api.AcrCLIClientInterface, login
 // countTagsByManifest returns a map that for a given manifest digest contains the number of tags associated to it.
 func countTagsByManifest(ctx context.Context, acrClient api.AcrCLIClientInterface, repoName string) (*map[string]int, error) {
 	countMap := map[string]int{}
-	lastTag := ""
-	resultTags, err := acrClient.GetAcrTags(ctx, repoName, "", lastTag)
+	resultTags, lastTag, err := acrClient.GetAcrTags(ctx, repoName, "", "")
 	if err != nil {
 		if resultTags != nil && resultTags.StatusCode == http.StatusNotFound {
 			//Repository not found, will be handled in the GetAcrManifests call
@@ -507,9 +514,8 @@ func countTagsByManifest(ctx context.Context, acrClient api.AcrCLIClientInterfac
 			}
 		}
 
-		lastTag = *tags[len(tags)-1].Name
 		// Keep on iterating until the resultTags or resultTags.TagsAttributes is nil
-		resultTags, err = acrClient.GetAcrTags(ctx, repoName, "", lastTag)
+		resultTags, lastTag, err = acrClient.GetAcrTags(ctx, repoName, "", lastTag)
 		if err != nil {
 			return nil, err
 		}

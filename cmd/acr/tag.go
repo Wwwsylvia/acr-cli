@@ -84,8 +84,7 @@ func newTagListCmd(out io.Writer, tagParams *tagParameters) *cobra.Command {
 
 // listTagss will do the http requests and print the digest of all the tags in the selected repository.
 func listTags(ctx context.Context, acrClient api.AcrCLIClientInterface, loginURL string, repoName string) error {
-	lastTag := ""
-	resultTags, err := acrClient.GetAcrTags(ctx, repoName, "", lastTag)
+	resultTags, lastTag, err := acrClient.GetAcrTags(ctx, repoName, "", "")
 	if err != nil {
 		return errors.Wrap(err, "failed to list tags")
 	}
@@ -101,8 +100,7 @@ func listTags(ctx context.Context, acrClient api.AcrCLIClientInterface, loginURL
 		// Since the GetAcrTags supports pagination when supplied with the last digest that was returned the last tag name
 		// digest is saved, the tag array contains at least one element because if it was empty the API would return
 		// a nil pointer instead of a pointer to a length 0 array.
-		lastTag = *tags[len(tags)-1].Name
-		resultTags, err = acrClient.GetAcrTags(ctx, repoName, "", lastTag)
+		resultTags, lastTag, err = acrClient.GetAcrTags(ctx, repoName, "", lastTag)
 		if err != nil {
 			return err
 		}

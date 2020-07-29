@@ -12,6 +12,8 @@ package acr
 import (
 	"context"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/azure"
@@ -1647,7 +1649,7 @@ func (client BaseClient) GetAcrTagMetadataResponder(resp *http.Response) (result
 // n - query parameter for max number of items
 // orderby - orderby query parameter
 // digest - filter by digest
-func (client BaseClient) GetAcrTags(ctx context.Context, name string, last string, n *int32, orderby string, digest string) (result RepositoryTagsType, err error) {
+func (client BaseClient) GetAcrTags(ctx context.Context, name string, last string, n *int32, orderby string, digest string) (result RepositoryTagsType, newLast string, err error) {
 	if tracing.IsEnabled() {
 		ctx = tracing.StartSpan(ctx, fqdn+"/BaseClient.GetAcrTags")
 		defer func() {
@@ -1671,12 +1673,37 @@ func (client BaseClient) GetAcrTags(ctx context.Context, name string, last strin
 		return
 	}
 
+	link := resp.Header["Link"]
+	if link != nil && len(link) > 0 {
+		newLast = client.getLinkLastParam(link[0])
+	}
+
 	result, err = client.GetAcrTagsResponder(resp)
 	if err != nil {
 		err = autorest.NewErrorWithError(err, "acr.BaseClient", "GetAcrTags", resp, "Failure responding to request")
 	}
 
 	return
+}
+
+// getLastParam parses a link URL and returns its 'last' parameter
+func (client BaseClient) getLinkLastParam(link string) string {
+	// link example: </v2/hello-world/tags/list?last=v1&n=2&orderby=>; rel="next"
+	parts := strings.Split(link, "?")
+	if len(parts) < 2 {
+		return ""
+	}
+
+	params, err := url.ParseQuery(parts[1])
+	if err != nil {
+		return ""
+	}
+
+	if len(params) == 0 || len(params["last"]) == 0 {
+		return ""
+	}
+
+	return params["last"][0]
 }
 
 // GetAcrTagsPreparer prepares the GetAcrTags request.
